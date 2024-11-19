@@ -2,8 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"math"
+	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,6 +17,35 @@ import (
 type model struct {
 	err error
 	out []byte
+}
+
+// uptime reads the file /proc/uptime and returns uptime in the HH:MM format.
+func uptime() (string, error) {
+	f, err := os.Open("/proc/uptime")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var content []byte
+	content, err = io.ReadAll(f)
+	if err != nil {
+		return "", err
+	}
+
+	var strContent string
+	strContent = string(content)
+	sliceContent := strings.Split(strContent, " ")
+
+	upt, err := strconv.ParseFloat(sliceContent[0], 64)
+	if err != nil {
+		return "", err
+	}
+
+	hh := int(upt / 3600)
+	mm := int(math.Mod(upt, 3600) / 60)
+
+	return fmt.Sprintf("%d:%d", hh, mm), nil
 }
 
 func (m *model) Init() tea.Cmd {
