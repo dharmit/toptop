@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,8 +16,9 @@ import (
 )
 
 type model struct {
-	err error
-	out []byte
+	err    error
+	out    string
+	uptime string
 }
 
 // uptime reads the file /proc/uptime and returns uptime in the HH:MM format.
@@ -45,16 +47,82 @@ func uptime() (string, error) {
 	hh := int(upt / 3600)
 	mm := int(math.Mod(upt, 3600) / 60)
 
-	return fmt.Sprintf("%d:%d", hh, mm), nil
+	return fmt.Sprintf("%d:%02d", hh, mm), nil
+}
+
+// loadAvg returns load average as reported by uptime command
+func loadAvg() ([3]float64, error) {
+	f, err := os.Open("/proc/loadavg")
+	if err != nil {
+		return [3]float64{}, err
+	}
+	defer f.Close()
+
+	var content []byte
+	content, err = io.ReadAll(f)
+	if err != nil {
+		return [3]float64{}, err
+	}
+
+	var strContent string
+	strContent = string(content)
+	sliceContent := strings.Split(strContent, " ")
+
+	var load [3]float64
+	for i := 0; i < 3; i++ {
+		load[i], err = strconv.ParseFloat(sliceContent[i], 64)
+		if err != nil {
+			return [3]float64{}, err
+		}
+	}
+	return load, nil
+}
+
+func userSessions() (int, error) {
+	var count int // keep a count of logged in users
+	err := filepath.Walk("/run/systemd/sessions", func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func topOut() (string, error) {
+	uptime, err := uptime()
+	if err != nil {
+		return "", err
+	}
+	load, err := loadAvg()
+	if err != nil {
+		return "", err
+	}
+	users, err := userSessions()
+	if err != nil {
+		return "", err
+	}
+	lastUpdated := time.Now()
+	return fmt.Sprintf("top - %s up %s,  %d users,  load average: %.2f, %.2f, %.2f\n\n",
+		lastUpdated.Format(time.TimeOnly),
+		uptime,
+		users,
+		load[0], load[1], load[2],
+	), nil
 }
 
 func (m *model) Init() tea.Cmd {
-	c := exec.Command("uptime")
-	out, err := c.Output()
+	var err error
+	m.out, err = topOut()
 	if err != nil {
 		return tea.Quit
 	}
-	m.out = out
 	return tick()
 }
 
@@ -74,12 +142,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case tickMsg:
-		c := exec.Command("uptime")
-		out, err := c.Output()
+		var err error
+		m.out, err = topOut()
 		if err != nil {
 			return m, tea.Quit
 		}
-		m.out = out
 		return m, tick()
 	}
 	return m, nil
@@ -89,7 +156,7 @@ func (m *model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("encountered error: %v\n", m.err)
 	}
-	return string(m.out)
+	return m.out
 }
 
 func main() {
